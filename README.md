@@ -121,9 +121,9 @@ This test runs offline and fails loudly if someone later removes the check.
 
 Page rules cover where an agent may act. Other layers cover what it may talk to and what it finds along the way:
 
-- [keep agents away from other AI services](https://www.aitoolsblocklist.com) such as unapproved chatbots and model APIs.
-- [which AI agents and assistants run in your network](https://www.shadowaitools.com), found from logs you already have.
-- [category context for agent destinations](https://www.urlcategorizationdatabase.com) when a policy depends on what a site is about.
+- The same register helps teams [block AI apps across the enterprise](https://www.aitoolsblocklist.com/enterprise-ai-blocking.php), so agents stay away from unapproved chatbots and model APIs too.
+- [Shadow AI detection tools](https://www.shadowaitools.com/detection-methodology.php) show which AI agents and assistants run in your network, found from logs you already have.
+- [Check domain category](https://www.urlcategorizationdatabase.com/check-domain.php) data when a policy depends on what a site is about.
 
 The approach lines up with the controls described in the OWASP Top 10 for LLM Applications (excessive agency) and the NIST AI Risk Management Framework, both of which call for limits on what automated agents may do without review.
 
