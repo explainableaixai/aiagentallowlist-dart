@@ -1,161 +1,137 @@
-# AI Agent Allowlist for Dart and Flutter
+# aiagentallowlist (Dart)
 
-`aiagentallowlist` is the Dart and Flutter per-URL policy client for browsing agents for [AI Agent Allowlist](https://www.aiagentallowlist.com). It gives applications a small, typed interface for a production data service while keeping authentication, URL construction, response decoding, retries, and error handling out of business logic.
+An AI agent allow list answers a narrow question before an autonomous agent opens a page: is this the kind of page it should touch? A login form, a checkout, an upload dialog or a wiki edit screen can all do damage when an agent acts on them without a person watching. This package asks that question from Dart and returns a verdict you can act on.
 
-A browser agent needs to distinguish a documentation page from a login, checkout, upload, comment, or other side-effect surface on the same host. Domain-only policy cannot express that boundary. The service covers more than 40 million domains, records as many as 28 verified page types per domain, and applies host, page-type, method-aware rule, and safe-default layers in a fixed order.
+The checks run against the [AI agent allow list with page-type verdicts](https://www.aiagentallowlist.com). Your code sends the URL the agent wants to visit. The service replies with what kind of page it is and whether policy allows the visit.
 
-This package is designed as a real client library rather than a collection of copied HTTP examples. It supports the normal lifecycle of a lookup: validate input, send the API key in the expected header, apply a bounded timeout, decode a successful response, distinguish authentication and quota failures, and expose response fields without discarding information that may be needed later. It fits browser navigation gates, tool-call authorization, egress proxy policy, pre-run URL audits and other applications where the decision must be repeatable and auditable.
-
-## Installation
-
-Install the published package from pub.dev:
-
-```text
+```bash
 dart pub add aiagentallowlist
 ```
 
-Store the API key outside source control. Examples use `AQ_API_KEY`, but production applications can obtain the value from their established secret manager. Never place a working key in a README, test fixture, command history, mobile bundle, browser-delivered JavaScript, or committed configuration file.
+## Why page type, not just domain
 
-## Quick start
+Blocking whole domains is too blunt for agents. An agent researching a supplier should read `stripe.com/pricing`, but it should not land on `stripe.com/login` and start typing. The same domain holds pages with very different risk. The service knows, for a large set of domains, where the sensitive pages live: login, signup, checkout, account settings, upload and edit screens. It judges the URL against that knowledge and against a set of rules.
+
+## The call
 
 ```dart
 import 'package:aiagentallowlist/aiagentallowlist.dart';
 
-Future<void> main() async {
-  final client = AIAgentAllowlistClient(apiKey: const String.fromEnvironment('AQ_API_KEY'));
-  final result = await client.check('https://example.com/checkout');
-  print(result.toJson());
+final guard = AIAgentAllowlistClient(apiKey: key);
+
+final r = await guard.check('https://github.com/login');
+print(r['verdict']);   // "deny"
+print(r['matched']);   // {layer: rules, id: login, ...}
+```
+
+`check` takes either a full URL or a bare domain.
+
+- **With a full URL**, the response includes a `verdict` and a `matched` object naming the layer that decided (`rules` for built-in patterns, `page_type_db` for a page found in the database) and the `id` of the page type, such as `login`, `checkout`, `upload` or `wiki_edit`.
+- **With a bare domain**, you get the domain record: `found`, the site `language`, and `page_types`, a map from page type to the known URL for that type on that site.
+
+## Wiring it into an agent loop
+
+Most agent frameworks expose a point just before a tool runs. That is where the check belongs. A browsing tool in Dart might look like this:
+
+```dart
+Future<String> browse(String url) async {
+  final decision = await guard.check(url);
+  if (decision['verdict'] == 'deny') {
+    final why = (decision['matched'] as Map?)?['id'] ?? 'policy';
+    return 'Blocked: this page is a $why page. Ask a person to do this step.';
+  }
+  return fetchPage(url);
 }
 ```
 
-The client returns a structured result containing verdict, matched policy layer, page type, and remaining lookup balance. It does not turn a nuanced response into an unexplained boolean unless a convenience method explicitly promises that behavior. Keeping the full result makes logs useful, allows a policy to evolve without repeating a lookup, and gives an operator enough context to understand why an action was taken.
+Two details make this pattern work well:
 
-## What the client handles
+- **Return the refusal to the model as text.** The agent reads it and can choose another route, or tell the user it needs help. Throwing an exception usually ends the run instead.
+- **Treat anything other than an explicit allow as a stop.** New verdict values may appear over time. A guard that only blocks on `deny` would let them through.
 
-The package owns transport concerns that should behave consistently across a codebase. It normalizes inputs only where the service contract allows normalization, attaches the API key without putting it in a query string, sends a descriptive user agent, negotiates JSON, checks status codes before decoding success models, and retains the response body on service errors. A caller should be able to catch an authentication problem separately from a quota limit, a malformed request, a temporary server failure, or a local network timeout.
+## Planning ahead with domain records
 
-Retries are intentionally conservative. Network interruptions, `429` responses with a usable delay, and selected `5xx` responses may be retried with bounded backoff. Invalid input and authentication failures are not retried because another identical request cannot repair them. Applications performing large batches should add their own pacing, concurrency limit, cancellation, and checkpointing around the client instead of starting an unbounded number of requests.
+Sometimes you want to know in advance where the risky pages are, for example to show a person which steps an agent will hand back. Look up the domain once:
 
-The default endpoint is suitable for normal hosted use, while a configurable base URL makes integration tests and licensed on-premises deployments possible. Timeout and retry values are configurable at client construction. Configuration is immutable after construction so the same instance can be shared safely according to normal Dart and Flutter conventions.
+```dart
+final site = await guard.check('stripe.com');
+if (site['found'] == true) {
+  final pages = site['page_types'] as Map<String, dynamic>;
+  print('Login lives at ${pages['login']}');
+}
+```
 
-## Response model
+A domain that is not in the database comes back with `found: false` and an empty `page_types` map. Full URLs on such domains are still judged by the rule layer, so a `/login` or `/checkout` path is caught even on sites nobody has catalogued.
 
-The public model mirrors useful service data and leaves room for additive fields. Unknown JSON properties should not make an otherwise valid response fail. New package versions may add typed accessors when the service adds fields, but callers that retain the raw response can adopt new data without waiting for a library release.
+## Options
 
-| Field | Purpose |
+```dart
+AIAgentAllowlistClient(
+  apiKey: key,
+  baseUrl: 'https://www.aiagentallowlist.com/api', // default
+  httpClient: myClient,                            // optional
+  timeout: const Duration(seconds: 10),            // default is 30
+);
+```
+
+For agents, a shorter timeout is often right. If the guard cannot answer quickly, stop the step rather than let the agent proceed unchecked.
+
+## Failure handling
+
+| Situation | What you get |
 |---|---|
-| `verdict` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `verdict_scope` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `matched` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `page_types` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `language` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `iab_category` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `filtering_categories` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `remaining_lookups` | Preserved from the service response for typed access, logging, or policy decisions. |
+| Empty key or URL | `ArgumentError`, no request sent |
+| HTTP 401 or 403 | `AuthenticationException` (wrong key or quota used up) |
+| HTTP 429 | `RateLimitException` |
+| Other HTTP errors or non-JSON replies | `ApiException` with `statusCode` and `body` |
+| Network timeout | `TimeoutException` from `dart:async` |
 
-Applications should record the query, result, decision, and request time in their own audit log. They should not record the API key. If results contain URLs or domains derived from user activity, apply the same retention and access controls used for the originating DNS, proxy, firewall, browser, or analytics data.
+Decide up front whether your agent fails open or closed. For anything that can spend money or change data, closed is the safer default: no verdict, no visit.
 
-## Integration pattern: request-time decision
+## Caching verdicts
 
-For interactive use, create one client during application startup and reuse it. Read the key and configuration once, validate that required values exist, then inject the client into the service that needs classifications. Reuse allows the underlying HTTP implementation to pool connections and makes global timeout and retry behavior predictable.
+Agents revisit the same URLs within a task. Caching per task is safe and cheap:
 
-Keep the policy separate from the lookup. The package reports service facts; the application decides what those facts mean for a user, tenant, network segment, or agent. That separation makes it possible to run in observation mode, compare proposed decisions with existing controls, and change a policy without replacing the transport layer.
+```dart
+final seen = <String, ApiResult>{};
+Future<ApiResult> checkOnce(String url) async =>
+    seen[url] ??= await guard.check(url);
+```
 
-When a lookup is on a critical request path, define failure behavior before deployment. Security controls commonly fail closed or send an indeterminate result to review. Analytics enrichment commonly fails open and records a missing classification for later repair. There is no universal answer, but silently treating a timeout as a positive result is rarely defensible.
+Clear the map between tasks so a policy change on the service takes effect quickly.
 
-## Integration pattern: batch processing
+## Logging decisions
 
-Batch jobs should remove duplicate inputs before making requests, preserve the original-to-normalized mapping, and save progress in restartable chunks. Use a small concurrency limit rather than one worker per row. Read quota information from every successful response and stop cleanly before exhaustion so a scheduled job can report what remains instead of producing a half-explained failure.
+Every verdict is worth a log line: the URL, the verdict, the matched page type and the task the agent was working on. Those records answer the first question anyone asks after an incident, which is what the agent tried to do. They also show which blocks happen most. A block that fires on every run of a workflow usually means the workflow needs a human step there, not a looser rule.
 
-A useful output record contains the original value, normalized value, lookup timestamp, package version, primary result, full category or policy data, and any error code. That record is adequate for later reconciliation and lets analysts distinguish “not found” from “not checked.” If the service data changes over time, the timestamp also makes clear which decision basis was available at the time.
+## Testing your guard
 
-Cache only for a period appropriate to the product. A short process-local cache eliminates repeated calls during one job. A longer shared cache can reduce cost, but it must include enough context in the key and must not outlive the organization’s tolerance for stale classifications. Do not cache authentication, malformed-request, or transient server errors as if they were valid negative answers.
+Inject a fake HTTP client and assert that your tool refuses what it should:
 
-## Operational guidance
+```dart
+final fake = MockClient((_) async => http.Response(
+    '{"verdict":"deny","matched":{"layer":"rules","id":"checkout"}}', 200));
+final guard = AIAgentAllowlistClient(apiKey: 't', httpClient: fake);
+expect(await browse('https://shop.example/checkout'), startsWith('Blocked'));
+```
 
-Use explicit timeouts at every layer. The HTTP timeout protects a single attempt, while an application deadline protects the complete operation including retries. Propagate cancellation from incoming requests and job supervisors. Emit metrics for total lookups, latency, success, status-code family, retries, cache hits, and remaining quota. Alert on sustained authentication errors, an unexpected increase in indeterminate results, or a quota trajectory that will reach zero before renewal.
+This test runs offline and fails loudly if someone later removes the check.
 
-Pin a compatible major version in application dependencies and test upgrades in staging. Package releases use semantic versioning: patch releases repair behavior without changing the public contract, minor releases add compatible capabilities, and major releases may require source changes. Service responses can gain fields independently, so decoders are forward-compatible and callers should avoid exhaustive assumptions about future enum values.
+## Related guardrails
 
-For regulated or security-sensitive deployments, retain the package version and policy version with every decision. A later review should be able to answer which code interpreted the response, which rule consumed it, and what the service returned. This is more valuable than a log line containing only “allowed” or “blocked.”
+Page rules cover where an agent may act. Other layers cover what it may talk to and what it finds along the way:
 
-## Errors
+- [keep agents away from other AI services](https://www.aitoolsblocklist.com) such as unapproved chatbots and model APIs.
+- [which AI agents and assistants run in your network](https://www.shadowaitools.com), found from logs you already have.
+- [category context for agent destinations](https://www.urlcategorizationdatabase.com) when a policy depends on what a site is about.
 
-The client distinguishes configuration errors raised before a request, invalid-input responses, authentication failures, exhausted quota or authorization failures, rate limits, transport timeouts, server failures, and response-decoding problems. Error values include an HTTP status when one exists and a safely bounded response body for diagnostics. Secrets are never included in an error message.
+The approach lines up with the controls described in the OWASP Top 10 for LLM Applications (excessive agency) and the NIST AI Risk Management Framework, both of which call for limits on what automated agents may do without review.
 
-Callers should handle known service errors explicitly and place a final handler around unexpected transport failures. Batch workflows can attach an error to an individual row and continue when appropriate. Authentication failures should normally stop the batch because every remaining request would fail. Rate limits should pause according to server guidance. Invalid rows can be quarantined for correction.
+## Same service, other languages
 
-## Security and privacy
-
-Use TLS verification and do not add a “disable certificate checks” option to production configuration. Restrict API keys by environment and product where the account system permits it. Rotate a key immediately if it appears in a package, repository, build log, support ticket, or client-side application. A deleted Git commit does not make an exposed key secret again.
-
-Minimize data sent to the service. Submit only the domain, URL, method, or file-derived hostname required by the documented operation. For log-analysis workflows, normalize and deduplicate locally before lookup. Do not attach cookies, page contents, user identifiers, authorization headers from the originating request, or unrelated log columns.
-
-## Why a maintained SDK helps
-
-Direct HTTP calls are easy for the first successful example and expensive at the edges. Six teams can otherwise invent six interpretations of timeouts, retries, missing fields, normalization, user agents, and quota failures. A maintained package gives those decisions one reviewed implementation and gives downstream applications a stable model even as internal transport details improve.
-
-An ecosystem-native package also makes discovery and evaluation easier. Users can inspect its license, release history, documentation, dependencies, source, and examples using familiar tools. They can pin a version, run dependency auditing, generate API documentation, and compare changes before upgrading. The README is part of that interface: it explains not just which method to call, but how the result belongs in an operational system.
-
-## Related implementations for the same product
-
-Use the implementation that matches the deployment environment. These repositories and registry pages all focus on AI Agent Allowlist rather than unrelated products:
-
-- [Primary multi-language repository](https://github.com/explainableaixai/aiagentallowlist)
-- [Composer repository](https://github.com/optimiser4/aiagentallowlist)
-- [GitLab mirror](https://gitlab.com/url-classifications/aiagentallowlist)
-- [npm client](https://www.npmjs.com/package/aiagentallowlist)
-- [Python client](https://pypi.org/project/aiagentallowlist/)
-- [Rust client](https://crates.io/crates/aiagentallowlist)
-- [PHP client](https://packagist.org/packages/aiagentallowlist/aiagentallowlist)
-
-The implementations share service concepts but follow the conventions of their languages. Method names, async models, error hierarchies, and packaging layouts are intentionally native rather than forced into a byte-for-byte common shape.
-
-## Companion data services
-
-The following links connect this package to complementary layers used in broader governance and classification systems. Each description identifies a distinct job rather than repeating a product name:
-
-- [Dart and Flutter client data sourced from AI Tools Blocklist for AI Agent Allowlist](https://www.aitoolsblocklist.com)
-- [Dart and Flutter workflow for exposing unapproved AI adoption alongside AI Agent Allowlist](https://www.shadowaitools.com)
-- [Dart and Flutter companion data for browser navigation gates within AI Agent Allowlist deployments](https://www.aiagentallowlist.com)
-- [Dart and Flutter enrichment layer connecting AI Agent Allowlist with contextual advertising](https://www.websitecategorizationapi.com)
-
-These services solve different questions. AI-service recognition identifies tools in network traffic. Shadow-AI analysis turns existing logs into an inventory. Agent URL policy evaluates the page an autonomous browser wants to reach. Content classification describes what a site is about, and filtering classification maps a site to network-policy categories. Combining them should be an explicit architecture decision, not an assumption that one verdict substitutes for another.
-
-## Standards and further reading
-
-- [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
-- [OWASP guidance on agentic application security](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
-- [RFC 9309 robots exclusion protocol](https://www.rfc-editor.org/rfc/rfc9309)
-
-These references provide vocabulary and control objectives; they do not endorse this package. Map the client’s output to the organization’s own risk assessment, legal duties, acceptable-use rules, and incident process.
-
-## Frequently asked questions
-
-### Does the package include the underlying database?
-
-No. The normal package is a client and contains no bulk commercial dataset. It sends documented lookup inputs to the hosted service and returns structured results. Where an offline database licence is available, the same client interface can be adapted to an internal endpoint so application policy does not have to change.
-
-### Should I create a new client for every lookup?
-
-No. Construct one client for an application or worker and reuse it. This keeps configuration consistent and allows connection pooling. Create separate clients only when endpoints, credentials, tenants, or materially different timeout policies require isolation.
-
-### Can I use the result as a permanent fact?
-
-Treat classifications and policy findings as dated intelligence. Websites change purpose, vendors revise terms, new page types appear, and threat or governance policy evolves. Store the lookup time and refresh data according to the consequence of staleness.
-
-### What should happen when the service is unavailable?
-
-Choose behavior based on the calling system’s risk. A security gate can deny or require review. An enrichment pipeline can retain the row as pending. Whatever the choice, make it explicit, observable, and tested. Do not convert an infrastructure failure into a confident classification.
-
-### Is batch processing one API call?
-
-The convenience batch method coordinates individual lookups unless the product documentation explicitly describes a bulk endpoint. Each item can consume quota. Deduplicate inputs, pace work, monitor the returned balance, and checkpoint output.
-
-### How should I contribute?
-
-Open an issue in the source repository with the package version, runtime version, a minimal reproduction, expected behavior, and sanitized response details. Never include a working API key or private network log. Changes should include tests and update public documentation when behavior changes.
+- [npm: aiagentallowlist](https://www.npmjs.com/package/aiagentallowlist)
+- [PyPI: aiagentallowlist](https://pypi.org/project/aiagentallowlist/)
 
 ## License
 
-MIT. The package licence covers the client source. Access to hosted APIs, downloadable datasets, and commercial data remains governed by the applicable service plan and terms.
+MIT

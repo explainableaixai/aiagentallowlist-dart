@@ -1,6 +1,6 @@
 name: aiagentallowlist
 description: Dart client for AI Agent Allowlist, with typed API errors, configurable timeouts, and JSON results.
-version: 1.0.0
+version: 1.0.1
 homepage: https://www.aiagentallowlist.com
 repository: https://github.com/explainableaixai/aiagentallowlist-dart
 issue_tracker: https://github.com/explainableaixai/aiagentallowlist-dart/issues
