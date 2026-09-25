@@ -121,7 +121,7 @@ This test runs offline and fails loudly if someone later removes the check.
 
 Page rules cover where an agent may act. Other layers cover what it may talk to and what it finds along the way:
 
-- The same register helps teams [block AI apps across the enterprise](https://www.aitoolsblocklist.com), so agents stay away from unapproved chatbots and model APIs too.
+- The same register helps teams [block AI apps across the enterprise](https://www.aitoolsblocklist.com/enterprise-ai-blocking.php), so agents stay away from unapproved chatbots and model APIs too.
 - [Shadow AI detection tools](https://www.shadowaitools.com/detection-methodology.php) show which AI agents and assistants run in your network, found from logs you already have.
 - [Check domain category](https://www.urlcategorizationdatabase.com/check-domain.php) data when a policy depends on what a site is about.
 
