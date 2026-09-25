@@ -115,7 +115,7 @@ The implementations share service concepts but follow the conventions of their l
 
 The following links connect this package to complementary layers used in broader governance and classification systems. Each description identifies a distinct job rather than repeating a product name:
 
-- [Dart and Flutter intelligence feed for recognizing AI services in AI Agent Allowlist workflows](https://www.aitoolsblocklist.com)
+- [Dart and Flutter client data sourced from AI Tools Blocklist for AI Agent Allowlist](https://www.aitoolsblocklist.com)
 - [Dart and Flutter workflow for exposing unapproved AI adoption alongside AI Agent Allowlist](https://www.shadowaitools.com)
 - [Dart and Flutter companion data for browser navigation gates within AI Agent Allowlist deployments](https://www.aiagentallowlist.com)
 - [Dart and Flutter enrichment layer connecting AI Agent Allowlist with contextual advertising](https://www.websitecategorizationapi.com)
